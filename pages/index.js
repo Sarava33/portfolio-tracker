@@ -24,6 +24,7 @@ export default function Home() {
   const [currentTab, setCurrentTab] = useState('holdings')
   const [editingStock, setEditingStock] = useState(null)
   const [sellingStock, setSellingStock] = useState(null)
+  const [isRefreshing, setIsRefreshing] = useState(false)
   const [formData, setFormData] = useState({
     symbol: '',
     quantity: '',
@@ -102,6 +103,8 @@ export default function Home() {
   const updatePrices = async () => {
     if (holdings.length === 0) return
     
+    setIsRefreshing(true) // Start loading
+    
     const symbols = holdings.map(s => s.symbol).join(',')
     try {
       const response = await fetch(`/api/prices?symbols=${symbols}`)
@@ -111,8 +114,14 @@ export default function Home() {
         ...stock,
         currentPrice: prices[stock.symbol] || stock.currentPrice
       })))
+      
+      // Optional: Add a small delay so users can see the animation
+      await new Promise(resolve => setTimeout(resolve, 500))
+      
     } catch (error) {
       console.error('Error updating prices:', error)
+    } finally {
+      setIsRefreshing(false) // Stop loading
     }
   }
 
@@ -451,9 +460,21 @@ export default function Home() {
               <div className="flex gap-4">
                 <button
                   onClick={updatePrices}
-                  className="px-6 py-3 bg-blue-500 text-white rounded-xl hover:bg-blue-600 transition-all"
+                  disabled={isRefreshing}
+                  className={`px-6 py-3 text-white rounded-xl transition-all duration-300 ${
+                    isRefreshing 
+                      ? 'bg-blue-400 cursor-not-allowed' 
+                      : 'bg-blue-500 hover:bg-blue-600 hover:scale-105'
+                  }`}
                 >
-                  🔄 Refresh Prices
+                  <div className="flex items-center gap-2">
+                    <span className={`${isRefreshing ? 'animate-spin' : ''}`}>
+                      🔄
+                    </span>
+                    <span>
+                      {isRefreshing ? 'Refreshing...' : 'Refresh Prices'}
+                    </span>
+                  </div>
                 </button>
                 <button
                   onClick={() => setShowAddModal(true)}
@@ -465,35 +486,99 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Summary Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-            <div className="bg-white/95 backdrop-blur rounded-xl p-6 shadow-lg">
-              <h3 className="text-sm font-semibold text-gray-600 uppercase">Total Invested</h3>
-              <p className="text-3xl font-bold text-gray-900 mt-2">
-                ${summary.totalInvested.toFixed(2)}
-              </p>
+          {/* Enhanced Summary Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+            {/* Total Invested & Current Value - Combined Card */}
+            <div className="bg-gradient-to-br from-blue-50 to-indigo-100 border border-blue-200 rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all duration-300">
+              <div className="flex items-center justify-between mb-4">
+                <div className="p-3 bg-blue-500 rounded-xl">
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
+                  </svg>
+                </div>
+                <span className="text-sm font-semibold text-blue-700 bg-blue-200 px-3 py-1 rounded-full">
+                  Portfolio Value
+                </span>
+              </div>
+              <div className="space-y-3">
+                <div>
+                  <p className="text-sm text-blue-600 font-medium">Total Invested</p>
+                  <p className="text-2xl font-bold text-gray-900">
+                    ${summary.totalInvested.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-sm text-blue-600 font-medium">Current Value</p>
+                  <p className="text-2xl font-bold text-gray-900">
+                    ${summary.currentValue.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                  </p>
+                </div>
+              </div>
             </div>
-            <div className="bg-white/95 backdrop-blur rounded-xl p-6 shadow-lg">
-              <h3 className="text-sm font-semibold text-gray-600 uppercase">Current Value</h3>
-              <p className="text-3xl font-bold text-gray-900 mt-2">
-                ${summary.currentValue.toFixed(2)}
-              </p>
+
+            {/* Unrealized & Realized P&L - Combined Card */}
+            <div className="bg-gradient-to-br from-green-50 to-emerald-100 border border-green-200 rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all duration-300">
+              <div className="flex items-center justify-between mb-4">
+                <div className="p-3 bg-green-500 rounded-xl">
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                  </svg>
+                </div>
+                <span className="text-sm font-semibold text-green-700 bg-green-200 px-3 py-1 rounded-full">
+                  Performance
+                </span>
+              </div>
+              <div className="space-y-3">
+                <div>
+                  <p className="text-sm text-green-600 font-medium">Unrealized P&L</p>
+                  <p className={`text-2xl font-bold ${(summary.totalPL - realizedPL) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {(summary.totalPL - realizedPL) >= 0 ? '+' : ''}$
+                    {Math.abs(summary.totalPL - realizedPL).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                  </p>
+                  <p className="text-xs text-gray-500">Active holdings</p>
+                </div>
+                <div>
+                  <p className="text-sm text-green-600 font-medium">Realized P&L</p>
+                  <p className={`text-2xl font-bold ${realizedPL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {realizedPL >= 0 ? '+' : ''}$
+                    {Math.abs(realizedPL).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                  </p>
+                  <p className="text-xs text-gray-500">From completed sales</p>
+                </div>
+              </div>
             </div>
-            <div className="bg-white/95 backdrop-blur rounded-xl p-6 shadow-lg">
-              <h3 className="text-sm font-semibold text-gray-600 uppercase">Total Returns</h3>
-              <p className={`text-3xl font-bold mt-2 ${summary.totalPL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {summary.totalPL >= 0 ? '+' : ''}${Math.abs(summary.totalPL).toFixed(2)}
-              </p>
-              <p className={`text-sm font-semibold mt-1 ${summary.totalPLPercent >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {summary.totalPLPercent >= 0 ? '+' : ''}{summary.totalPLPercent.toFixed(2)}%
-              </p>
-            </div>
-            <div className="bg-white/95 backdrop-blur rounded-xl p-6 shadow-lg">
-              <h3 className="text-sm font-semibold text-gray-600 uppercase">Holdings</h3>
-              <p className="text-3xl font-bold text-gray-900 mt-2">{holdings.length}</p>
-              <p className="text-xs text-gray-500 mt-1">
-                {summary.longTermCount} LTCG, {summary.shortTermCount} STCG
-              </p>
+
+            {/* Total P&L & Holdings - Combined Card */}
+            <div className="bg-gradient-to-br from-purple-50 to-violet-100 border border-purple-200 rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all duration-300">
+              <div className="flex items-center justify-between mb-4">
+                <div className="p-3 bg-purple-500 rounded-xl">
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                  </svg>
+                </div>
+                <span className="text-sm font-semibold text-purple-700 bg-purple-200 px-3 py-1 rounded-full">
+                  Summary
+                </span>
+              </div>
+              <div className="space-y-3">
+                <div>
+                  <p className="text-sm text-purple-600 font-medium">Total P&L</p>
+                  <p className={`text-2xl font-bold ${summary.totalPL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {summary.totalPL >= 0 ? '+' : ''}$
+                    {Math.abs(summary.totalPL).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                  </p>
+                  <p className={`text-sm font-semibold ${summary.totalPLPercent >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {summary.totalPLPercent >= 0 ? '+' : ''}{summary.totalPLPercent.toFixed(2)}% return
+                  </p>
+                </div>
+                <div>
+                  <p className="text-sm text-purple-600 font-medium">Active Holdings</p>
+                  <p className="text-2xl font-bold text-gray-900">{holdings.length}</p>
+                  <p className="text-xs text-gray-500">
+                    {summary.longTermCount} LTCG • {summary.shortTermCount} STCG
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -535,94 +620,163 @@ export default function Home() {
             <div className="p-6">
               {/* Holdings Tab */}
               {currentTab === 'holdings' && (
-                <div className="overflow-x-auto">
-                  {holdings.length === 0 ? (
-                    <p className="text-center py-8 text-gray-500">
-                      No holdings yet. Click "Add Stock" to get started.
-                    </p>
-                  ) : (
-                    <table className="w-full">
-                      <thead>
-                        <tr className="border-b">
-                          <th className="text-left py-3 px-4">Symbol</th>
-                          <th className="text-left py-3 px-4">Qty</th>
-                          <th className="text-left py-3 px-4">Buy Price</th>
-                          <th className="text-left py-3 px-4">Current</th>
-                          <th className="text-left py-3 px-4">Period</th>
-                          <th className="text-left py-3 px-4">P&L</th>
-                          <th className="text-left py-3 px-4">P&L %</th>
-                          <th className="text-left py-3 px-4">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {holdings.map(holding => {
-                          const calc = calculatePL(holding)
-                          const period = calculateHoldingPeriod(holding.buy_date)
-                          const ltcg = isLongTerm(holding.buy_date)
-                          
-                          return (
-                            <tr key={holding.id} className="border-b hover:bg-gray-50">
-                              <td className="py-3 px-4">
-                                <div className="flex items-center gap-2">
-                                  <span className="font-semibold">{holding.symbol}</span>
-                                  {ltcg && (
-                                    <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">
-                                      LTCG
+                <div className="space-y-8">
+                  {/* Active Holdings Section */}
+                  <div className="overflow-x-auto">
+                    <h3 className="text-lg font-semibold mb-4">Active Holdings</h3>
+                    {holdings.length === 0 ? (
+                      <p className="text-center py-8 text-gray-500">
+                        No active holdings. Click "Add Stock" to get started.
+                      </p>
+                    ) : (
+                      <table className="w-full">
+                        <thead>
+                          <tr className="border-b">
+                            <th className="text-left py-3 px-4">Symbol</th>
+                            <th className="text-left py-3 px-4">Qty</th>
+                            <th className="text-left py-3 px-4">Buy Price</th>
+                            <th className="text-left py-3 px-4">Current</th>
+                            <th className="text-left py-3 px-4">Period</th>
+                            <th className="text-left py-3 px-4">P&L</th>
+                            <th className="text-left py-3 px-4">P&L %</th>
+                            <th className="text-left py-3 px-4">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {holdings.map(holding => {
+                            const calc = calculatePL(holding)
+                            const period = calculateHoldingPeriod(holding.buy_date)
+                            const ltcg = isLongTerm(holding.buy_date)
+                            
+                            return (
+                              <tr key={holding.id} className="border-b hover:bg-gray-50">
+                                <td className="py-3 px-4">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-semibold">{holding.symbol}</span>
+                                    {ltcg && (
+                                      <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">
+                                        LTCG
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="py-3 px-4">{holding.quantity}</td>
+                                <td className="py-3 px-4">${holding.buy_price.toFixed(2)}</td>
+                                <td className="py-3 px-4">
+                                  <span className={`font-semibold ${
+                                    holding.currentPrice > holding.buy_price ? 'text-green-600' : 'text-red-600'
+                                  }`}>
+                                    ${holding.currentPrice.toFixed(2)}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-4">{period}</td>
+                                <td className="py-3 px-4">
+                                  <span className={`font-semibold ${
+                                    calc.pl >= 0 ? 'text-green-600' : 'text-red-600'
+                                  }`}>
+                                    {calc.pl >= 0 ? '+' : ''}${Math.abs(calc.pl).toFixed(2)}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-4">
+                                  <span className={`font-semibold ${
+                                    calc.plPercent >= 0 ? 'text-green-600' : 'text-red-600'
+                                  }`}>
+                                    {calc.plPercent >= 0 ? '+' : ''}{calc.plPercent.toFixed(2)}%
+                                  </span>
+                                </td>
+                                <td className="py-3 px-4">
+                                  <div className="flex gap-2">
+                                    <button
+                                      onClick={() => openEditModal(holding)}
+                                      className="text-blue-600 hover:text-blue-800"
+                                    >
+                                      ✏️
+                                    </button>
+                                    <button
+                                      onClick={() => openSellModal(holding)}
+                                      className="text-green-600 hover:text-green-800"
+                                    >
+                                      💰
+                                    </button>
+                                    <button
+                                      onClick={() => deleteStock(holding.id)}
+                                      className="text-red-600 hover:text-red-800"
+                                    >
+                                      🗑️
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+
+                  {/* Sold Positions Section */}
+                  {soldStocks.length > 0 && (
+                    <div className="overflow-x-auto">
+                      <h3 className="text-lg font-semibold mb-4">Sold Positions</h3>
+                      <table className="w-full">
+                        <thead>
+                          <tr className="border-b">
+                            <th className="text-left py-3 px-4">Symbol</th>
+                            <th className="text-left py-3 px-4">Qty</th>
+                            <th className="text-left py-3 px-4">Buy Price</th>
+                            <th className="text-left py-3 px-4">Sell Price</th>
+                            <th className="text-left py-3 px-4">Buy Date</th>
+                            <th className="text-left py-3 px-4">Sell Date</th>
+                            <th className="text-left py-3 px-4">Realized P&L</th>
+                            <th className="text-left py-3 px-4">Return %</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {soldStocks.map(stock => {
+                            const buyValue = stock.quantity * stock.buy_price
+                            const sellValue = stock.quantity * stock.sell_price
+                            const buyCommission = buyValue * (stock.commission / 100)
+                            const sellCommission = sellValue * (stock.commission / 100)
+                            const buyTotal = buyValue + buyCommission + (stock.service_charge || 0)
+                            const sellTotal = sellValue - sellCommission
+                            const realizedPL = sellTotal - buyTotal
+                            const returnPercent = (realizedPL / buyTotal) * 100
+                            
+                            return (
+                              <tr key={stock.id} className="border-b hover:bg-gray-50 bg-gray-25">
+                                <td className="py-3 px-4">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-semibold">{stock.symbol}</span>
+                                    <span className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded-full">
+                                      SOLD
                                     </span>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="py-3 px-4">{holding.quantity}</td>
-                              <td className="py-3 px-4">${holding.buy_price.toFixed(2)}</td>
-                              <td className="py-3 px-4">
-                                <span className={`font-semibold ${
-                                  holding.currentPrice > holding.buy_price ? 'text-green-600' : 'text-red-600'
-                                }`}>
-                                  ${holding.currentPrice.toFixed(2)}
-                                </span>
-                              </td>
-                              <td className="py-3 px-4">{period}</td>
-                              <td className="py-3 px-4">
-                                <span className={`font-semibold ${
-                                  calc.pl >= 0 ? 'text-green-600' : 'text-red-600'
-                                }`}>
-                                  {calc.pl >= 0 ? '+' : ''}${Math.abs(calc.pl).toFixed(2)}
-                                </span>
-                              </td>
-                              <td className="py-3 px-4">
-                                <span className={`font-semibold ${
-                                  calc.plPercent >= 0 ? 'text-green-600' : 'text-red-600'
-                                }`}>
-                                  {calc.plPercent >= 0 ? '+' : ''}{calc.plPercent.toFixed(2)}%
-                                </span>
-                              </td>
-                              <td className="py-3 px-4">
-                                <div className="flex gap-2">
-                                  <button
-                                    onClick={() => openEditModal(holding)}
-                                    className="text-blue-600 hover:text-blue-800"
-                                  >
-                                    ✏️
-                                  </button>
-                                  <button
-                                    onClick={() => openSellModal(holding)}
-                                    className="text-green-600 hover:text-green-800"
-                                  >
-                                    💰
-                                  </button>
-                                  <button
-                                    onClick={() => deleteStock(holding.id)}
-                                    className="text-red-600 hover:text-red-800"
-                                  >
-                                    🗑️
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
+                                  </div>
+                                </td>
+                                <td className="py-3 px-4">{stock.quantity}</td>
+                                <td className="py-3 px-4">${stock.buy_price.toFixed(2)}</td>
+                                <td className="py-3 px-4">${stock.sell_price.toFixed(2)}</td>
+                                <td className="py-3 px-4">{stock.buy_date}</td>
+                                <td className="py-3 px-4">{stock.sell_date}</td>
+                                <td className="py-3 px-4">
+                                  <span className={`font-semibold ${
+                                    realizedPL >= 0 ? 'text-green-600' : 'text-red-600'
+                                  }`}>
+                                    {realizedPL >= 0 ? '+' : ''}${Math.abs(realizedPL).toFixed(2)}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-4">
+                                  <span className={`font-semibold ${
+                                    returnPercent >= 0 ? 'text-green-600' : 'text-red-600'
+                                  }`}>
+                                    {returnPercent >= 0 ? '+' : ''}{returnPercent.toFixed(2)}%
+                                  </span>
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                 </div>
               )}
@@ -683,8 +837,6 @@ export default function Home() {
                       <>
                         <div className="bg-gray-50 rounded-xl p-6">
                           <h3 className="text-lg font-semibold mb-4">Portfolio Distribution</h3>
-                          {console.log('DEBUG - COLORS:', COLORS)}
-                          {console.log('DEBUG - pieChartData:', pieChartData)}
                           <PieChart width={400} height={300}>
                             <Pie
                               data={pieChartData}

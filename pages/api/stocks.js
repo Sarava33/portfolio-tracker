@@ -14,7 +14,7 @@ export default async function handler(req, res) {
           .from('stocks')
           .select('*')
           .eq('user_id', userId)
-          .is('sell_date', null)
+          //.is('sell_date', null)
 
         if (error) throw error
         res.status(200).json(data || [])
