@@ -1,20 +1,23 @@
-const mainApp = `import { useState, useEffect } from 'react'
+//const mainApp = 
+import { useState, useEffect } from 'react'
 import Head from 'next/head'
 import Script from 'next/script'
 import dynamic from 'next/dynamic'
+import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts'
 
 // Dynamically import Recharts to avoid SSR issues
-const PieChart = dynamic(() => import('recharts').then(mod => mod.PieChart), { ssr: false })
-const Pie = dynamic(() => import('recharts').then(mod => mod.Pie), { ssr: false })
-const Cell = dynamic(() => import('recharts').then(mod => mod.Cell), { ssr: false })
-const BarChart = dynamic(() => import('recharts').then(mod => mod.BarChart), { ssr: false })
-const Bar = dynamic(() => import('recharts').then(mod => mod.Bar), { ssr: false })
-const XAxis = dynamic(() => import('recharts').then(mod => mod.XAxis), { ssr: false })
-const YAxis = dynamic(() => import('recharts').then(mod => mod.YAxis), { ssr: false })
-const Tooltip = dynamic(() => import('recharts').then(mod => mod.Tooltip), { ssr: false })
+// const PieChart = dynamic(() => import('recharts').then(mod => mod.PieChart), { ssr: false })
+// const Pie = dynamic(() => import('recharts').then(mod => mod.Pie), { ssr: false })
+// const Cell = dynamic(() => import('recharts').then(mod => mod.Cell), { ssr: false })
+// const BarChart = dynamic(() => import('recharts').then(mod => mod.BarChart), { ssr: false })
+// const Bar = dynamic(() => import('recharts').then(mod => mod.Bar), { ssr: false })
+// const XAxis = dynamic(() => import('recharts').then(mod => mod.XAxis), { ssr: false })
+// const YAxis = dynamic(() => import('recharts').then(mod => mod.YAxis), { ssr: false })
+// const Tooltip = dynamic(() => import('recharts').then(mod => mod.Tooltip), { ssr: false })
 
 export default function Home() {
   const [holdings, setHoldings] = useState([])
+  const [soldStocks, setSoldStocks] = useState([])
   const [transactions, setTransactions] = useState([])
   const [showAddModal, setShowAddModal] = useState(false)
   const [showSellModal, setShowSellModal] = useState(false)
@@ -51,15 +54,19 @@ export default function Home() {
       const response = await fetch('/api/stocks', {
         headers: { 'user-id': getUserId() }
       })
-      const data = await response.json()
+      const allStocks = await response.json()
       
-      // Add current prices
-      if (data.length > 0) {
-        const symbols = data.map(s => s.symbol).join(',')
-        const pricesResponse = await fetch(\`/api/prices?symbols=\${symbols}\`)
+      // Separate active and sold stocks
+      const activeHoldings = allStocks.filter(stock => !stock.sell_date)
+      const soldStocks = allStocks.filter(stock => stock.sell_date)
+      
+      // Add current prices to active holdings
+      if (activeHoldings.length > 0) {
+        const symbols = activeHoldings.map(s => s.symbol).join(',')
+        const pricesResponse = await fetch(`/api/prices?symbols=${symbols}`)
         const prices = await pricesResponse.json()
         
-        const holdingsWithPrices = data.map(stock => ({
+        const holdingsWithPrices = activeHoldings.map(stock => ({
           ...stock,
           currentPrice: prices[stock.symbol] || stock.buy_price
         }))
@@ -67,9 +74,12 @@ export default function Home() {
       } else {
         setHoldings([])
       }
+      
+      // Store sold stocks for P&L calculations
+      setSoldStocks(soldStocks) // You'll need to add this state
+      
     } catch (error) {
       console.error('Error loading holdings:', error)
-      // Use local storage as fallback
       const saved = localStorage.getItem('portfolio_holdings')
       if (saved) setHoldings(JSON.parse(saved))
     }
@@ -94,7 +104,7 @@ export default function Home() {
     
     const symbols = holdings.map(s => s.symbol).join(',')
     try {
-      const response = await fetch(\`/api/prices?symbols=\${symbols}\`)
+      const response = await fetch(`/api/prices?symbols=${symbols}`)
       const prices = await response.json()
       
       setHoldings(prev => prev.map(stock => ({
@@ -197,48 +207,97 @@ export default function Home() {
       return
     }
 
-    // Add sell transaction
-    const newTransaction = {
-      id: Date.now().toString(),
-      date: new Date().toISOString().split('T')[0],
-      type: 'SELL',
-      symbol: sellingStock.symbol,
-      quantity: sellQuantity,
-      price: sellPrice,
-      commission: sellingStock.commission,
-      notes: \`Sold from position bought on \${sellingStock.buy_date}\`
-    }
-    
-    const updatedTransactions = [newTransaction, ...transactions]
-    setTransactions(updatedTransactions)
-    localStorage.setItem('portfolio_transactions', JSON.stringify(updatedTransactions))
+    try {
+      if (sellQuantity >= sellingStock.quantity) {
+        // Selling entire position - update the stock record with sell data
+        const updateData = {
+          id: sellingStock.id,
+          sell_price: sellPrice,
+          sell_date: new Date().toISOString().split('T')[0]
+        }
+        
+        await fetch('/api/stocks', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'user-id': getUserId()
+          },
+          body: JSON.stringify(updateData)
+        })
+      } else {
+        // Partial sale - need to split the position
+        // First, reduce the original position
+        const updateData = {
+          id: sellingStock.id,
+          quantity: sellingStock.quantity - sellQuantity
+        }
+        
+        await fetch('/api/stocks', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'user-id': getUserId()
+          },
+          body: JSON.stringify(updateData)
+        })
+        
+        // Create a new "sold" record for the sold portion
+        const soldStock = {
+          symbol: sellingStock.symbol,
+          quantity: sellQuantity,
+          buy_price: sellingStock.buy_price,
+          buy_date: sellingStock.buy_date,
+          sell_price: sellPrice,
+          sell_date: new Date().toISOString().split('T')[0],
+          commission: sellingStock.commission,
+          tax: sellingStock.tax,
+          service_charge: sellingStock.service_charge,
+          notes: `Partial sale from position bought on ${sellingStock.buy_date}`
+        }
+        
+        await fetch('/api/stocks', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'user-id': getUserId()
+          },
+          body: JSON.stringify(soldStock)
+        })
+      }
 
-    // Update or remove holding
-    let updatedHoldings
-    if (sellQuantity >= sellingStock.quantity) {
-      // Remove completely
-      updatedHoldings = holdings.filter(h => h.id !== sellingStock.id)
-    } else {
-      // Reduce quantity
-      updatedHoldings = holdings.map(h => 
-        h.id === sellingStock.id 
-          ? { ...h, quantity: h.quantity - sellQuantity }
-          : h
-      )
+      // Add sell transaction to localStorage (since transactions table isn't being used in API)
+      const newTransaction = {
+        id: Date.now().toString(),
+        date: new Date().toISOString().split('T')[0],
+        type: 'SELL',
+        symbol: sellingStock.symbol,
+        quantity: sellQuantity,
+        price: sellPrice,
+        commission: sellingStock.commission,
+        notes: `Sold from position bought on ${sellingStock.buy_date}`
+      }
+      
+      const updatedTransactions = [newTransaction, ...transactions]
+      setTransactions(updatedTransactions)
+      localStorage.setItem('portfolio_transactions', JSON.stringify(updatedTransactions))
+
+      // Reload holdings from database
+      await loadHoldings()
+      
+      setShowSellModal(false)
+      setSellData({ quantity: '', sellPrice: '' })
+      
+    } catch (error) {
+      console.error('Error selling stock:', error)
+      alert('Error processing sale. Please try again.')
     }
-    
-    setHoldings(updatedHoldings)
-    localStorage.setItem('portfolio_holdings', JSON.stringify(updatedHoldings))
-    
-    setShowSellModal(false)
-    setSellData({ quantity: '', sellPrice: '' })
   }
 
   const deleteStock = async (id) => {
     if (!confirm('Are you sure you want to delete this stock?')) return
     
     try {
-      await fetch(\`/api/stocks?id=\${id}\`, {
+      await fetch(`/api/stocks?id=${id}`, {
         method: 'DELETE',
         headers: { 'user-id': getUserId() }
       })
@@ -309,9 +368,9 @@ export default function Home() {
     const months = Math.floor(days / 30)
     const years = Math.floor(days / 365)
     
-    if (years > 0) return \`\${years}y \${months % 12}m\`
-    if (months > 0) return \`\${months}m \${days % 30}d\`
-    return \`\${days}d\`
+    if (years > 0) return `${years}y ${months % 12}m`
+    if (months > 0) return `${months}m ${days % 30}d`
+    return `${days}d`
   }
 
   const isLongTerm = (buyDate) => {
@@ -332,8 +391,23 @@ export default function Home() {
     return acc
   }, { totalInvested: 0, currentValue: 0, totalPL: 0, longTermCount: 0, shortTermCount: 0 })
 
-  summary.totalPLPercent = summary.totalInvested > 0 ? (summary.totalPL / summary.totalInvested) * 100 : 0
+  // Add realized P&L from sold stocks
+  const realizedPL = soldStocks.reduce((total, stock) => {
+    if (stock.sell_price && stock.sell_date) {
+      const buyValue = stock.quantity * stock.buy_price
+      const sellValue = stock.quantity * stock.sell_price
+      const buyCommission = buyValue * (stock.commission / 100)
+      const sellCommission = sellValue * (stock.commission / 100)
+      const buyTotal = buyValue + buyCommission + (stock.service_charge || 0)
+      const sellTotal = sellValue - sellCommission
+      const realized = sellTotal - buyTotal
+      return total + realized
+    }
+    return total
+  }, 0)
 
+  summary.totalPL += realizedPL
+  summary.totalPLPercent = summary.totalInvested > 0 ? (summary.totalPL / summary.totalInvested) * 100 : 0
   // Chart data
   const pieChartData = holdings.map(h => ({
     name: h.symbol,
@@ -348,7 +422,10 @@ export default function Home() {
     }
   })
 
-  const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316']
+  const COLORS = [
+  '#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', 
+  '#14B8A6', '#F97316', '#6366F1', '#84CC16', '#F43F5E', '#06B6D4',
+  '#8B5A2B', '#7C3AED', '#059669', '#DC2626', '#7C2D12', '#1E40AF']
 
   return (
     <>
@@ -393,29 +470,29 @@ export default function Home() {
             <div className="bg-white/95 backdrop-blur rounded-xl p-6 shadow-lg">
               <h3 className="text-sm font-semibold text-gray-600 uppercase">Total Invested</h3>
               <p className="text-3xl font-bold text-gray-900 mt-2">
-                $\{summary.totalInvested.toFixed(2)}
+                ${summary.totalInvested.toFixed(2)}
               </p>
             </div>
             <div className="bg-white/95 backdrop-blur rounded-xl p-6 shadow-lg">
               <h3 className="text-sm font-semibold text-gray-600 uppercase">Current Value</h3>
               <p className="text-3xl font-bold text-gray-900 mt-2">
-                $\{summary.currentValue.toFixed(2)}
+                ${summary.currentValue.toFixed(2)}
               </p>
             </div>
             <div className="bg-white/95 backdrop-blur rounded-xl p-6 shadow-lg">
               <h3 className="text-sm font-semibold text-gray-600 uppercase">Total Returns</h3>
-              <p className={\`text-3xl font-bold mt-2 \${summary.totalPL >= 0 ? 'text-green-600' : 'text-red-600'}\`}>
-                \{summary.totalPL >= 0 ? '+' : ''}$\{Math.abs(summary.totalPL).toFixed(2)}
+              <p className={`text-3xl font-bold mt-2 ${summary.totalPL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                {summary.totalPL >= 0 ? '+' : ''}${Math.abs(summary.totalPL).toFixed(2)}
               </p>
-              <p className={\`text-sm font-semibold mt-1 \${summary.totalPLPercent >= 0 ? 'text-green-600' : 'text-red-600'}\`}>
-                \{summary.totalPLPercent >= 0 ? '+' : ''}\{summary.totalPLPercent.toFixed(2)}%
+              <p className={`text-sm font-semibold mt-1 ${summary.totalPLPercent >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                {summary.totalPLPercent >= 0 ? '+' : ''}{summary.totalPLPercent.toFixed(2)}%
               </p>
             </div>
             <div className="bg-white/95 backdrop-blur rounded-xl p-6 shadow-lg">
               <h3 className="text-sm font-semibold text-gray-600 uppercase">Holdings</h3>
-              <p className="text-3xl font-bold text-gray-900 mt-2">\{holdings.length}</p>
+              <p className="text-3xl font-bold text-gray-900 mt-2">{holdings.length}</p>
               <p className="text-xs text-gray-500 mt-1">
-                \{summary.longTermCount} LTCG, \{summary.shortTermCount} STCG
+                {summary.longTermCount} LTCG, {summary.shortTermCount} STCG
               </p>
             </div>
           </div>
@@ -425,31 +502,31 @@ export default function Home() {
             <div className="flex border-b">
               <button
                 onClick={() => setCurrentTab('holdings')}
-                className={\`px-6 py-3 font-semibold transition-all \${
+                className={`px-6 py-3 font-semibold transition-all ${
                   currentTab === 'holdings' 
                     ? 'border-b-2 border-blue-500 text-blue-600' 
                     : 'text-gray-600 hover:text-gray-900'
-                }\`}
+                }`}
               >
                 Holdings
               </button>
               <button
                 onClick={() => setCurrentTab('transactions')}
-                className={\`px-6 py-3 font-semibold transition-all \${
+                className={`px-6 py-3 font-semibold transition-all ${
                   currentTab === 'transactions' 
                     ? 'border-b-2 border-blue-500 text-blue-600' 
                     : 'text-gray-600 hover:text-gray-900'
-                }\`}
+                }`}
               >
                 Transactions
               </button>
               <button
                 onClick={() => setCurrentTab('analytics')}
-                className={\`px-6 py-3 font-semibold transition-all \${
+                className={`px-6 py-3 font-semibold transition-all ${
                   currentTab === 'analytics' 
                     ? 'border-b-2 border-blue-500 text-blue-600' 
                     : 'text-gray-600 hover:text-gray-900'
-                }\`}
+                }`}
               >
                 Analytics
               </button>
@@ -487,7 +564,7 @@ export default function Home() {
                             <tr key={holding.id} className="border-b hover:bg-gray-50">
                               <td className="py-3 px-4">
                                 <div className="flex items-center gap-2">
-                                  <span className="font-semibold">\{holding.symbol}</span>
+                                  <span className="font-semibold">{holding.symbol}</span>
                                   {ltcg && (
                                     <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">
                                       LTCG
@@ -495,28 +572,28 @@ export default function Home() {
                                   )}
                                 </div>
                               </td>
-                              <td className="py-3 px-4">\{holding.quantity}</td>
-                              <td className="py-3 px-4">$\{holding.buy_price.toFixed(2)}</td>
+                              <td className="py-3 px-4">{holding.quantity}</td>
+                              <td className="py-3 px-4">${holding.buy_price.toFixed(2)}</td>
                               <td className="py-3 px-4">
-                                <span className={\`font-semibold \${
+                                <span className={`font-semibold ${
                                   holding.currentPrice > holding.buy_price ? 'text-green-600' : 'text-red-600'
-                                }\`}>
-                                  $\{holding.currentPrice.toFixed(2)}
+                                }`}>
+                                  ${holding.currentPrice.toFixed(2)}
                                 </span>
                               </td>
-                              <td className="py-3 px-4">\{period}</td>
+                              <td className="py-3 px-4">{period}</td>
                               <td className="py-3 px-4">
-                                <span className={\`font-semibold \${
+                                <span className={`font-semibold ${
                                   calc.pl >= 0 ? 'text-green-600' : 'text-red-600'
-                                }\`}>
-                                  \{calc.pl >= 0 ? '+' : ''}$\{Math.abs(calc.pl).toFixed(2)}
+                                }`}>
+                                  {calc.pl >= 0 ? '+' : ''}${Math.abs(calc.pl).toFixed(2)}
                                 </span>
                               </td>
                               <td className="py-3 px-4">
-                                <span className={\`font-semibold \${
+                                <span className={`font-semibold ${
                                   calc.plPercent >= 0 ? 'text-green-600' : 'text-red-600'
-                                }\`}>
-                                  \{calc.plPercent >= 0 ? '+' : ''}\{calc.plPercent.toFixed(2)}%
+                                }`}>
+                                  {calc.plPercent >= 0 ? '+' : ''}{calc.plPercent.toFixed(2)}%
                                 </span>
                               </td>
                               <td className="py-3 px-4">
@@ -573,19 +650,19 @@ export default function Home() {
                           <tr key={tx.id} className="border-b hover:bg-gray-50">
                             <td className="py-3 px-4">{tx.date}</td>
                             <td className="py-3 px-4">
-                              <span className={\`px-2 py-1 rounded text-sm font-semibold \${
+                              <span className={`px-2 py-1 rounded text-sm font-semibold ${
                                 tx.type === 'BUY' 
                                   ? 'bg-green-100 text-green-700' 
                                   : 'bg-red-100 text-red-700'
-                              }\`}>
+                              }`}>
                                 {tx.type}
                               </span>
                             </td>
                             <td className="py-3 px-4 font-semibold">{tx.symbol}</td>
                             <td className="py-3 px-4">{tx.quantity}</td>
-                            <td className="py-3 px-4">\${tx.price.toFixed(2)}</td>
+                            <td className="py-3 px-4">${tx.price.toFixed(2)}</td>
                             <td className="py-3 px-4 font-semibold">
-                              \${(tx.quantity * tx.price).toFixed(2)}
+                              ${(tx.quantity * tx.price).toFixed(2)}
                             </td>
                             <td className="py-3 px-4 text-sm text-gray-600">
                               {tx.notes || '-'}
@@ -606,18 +683,19 @@ export default function Home() {
                       <>
                         <div className="bg-gray-50 rounded-xl p-6">
                           <h3 className="text-lg font-semibold mb-4">Portfolio Distribution</h3>
+                          {console.log('DEBUG - COLORS:', COLORS)}
+                          {console.log('DEBUG - pieChartData:', pieChartData)}
                           <PieChart width={400} height={300}>
                             <Pie
                               data={pieChartData}
                               cx={200}
                               cy={150}
                               outerRadius={100}
-                              fill="#8884d8"
                               dataKey="value"
                               label={(entry) => entry.name}
                             >
                               {pieChartData.map((entry, index) => (
-                                <Cell key={\`cell-\${index}\`} fill={COLORS[index % COLORS.length]} />
+                                <Cell key={index} fill={COLORS[index % COLORS.length]} />
                               ))}
                             </Pie>
                             <Tooltip />
@@ -632,7 +710,7 @@ export default function Home() {
                             <Tooltip />
                             <Bar dataKey="value" fill="#3B82F6">
                               {barChartData.map((entry, index) => (
-                                <Cell key={\`cell-\${index}\`} fill={entry.value >= 0 ? '#10B981' : '#EF4444'} />
+                                <Cell key={`cell-${index}`} fill={entry.value >= 0 ? '#10B981' : '#EF4444'} />
                               ))}
                             </Bar>
                           </BarChart>
@@ -645,12 +723,12 @@ export default function Home() {
                     <div className="bg-gray-50 rounded-xl p-6">
                       <h4 className="font-semibold text-gray-700 mb-2">Long-term Holdings</h4>
                       <p className="text-3xl font-bold text-green-600">{summary.longTermCount}</p>
-                      <p className="text-sm text-gray-500">Held > 12 months</p>
+                      <p className="text-sm text-gray-500">Held &gt; 12 months</p>
                     </div>
                     <div className="bg-gray-50 rounded-xl p-6">
                       <h4 className="font-semibold text-gray-700 mb-2">Short-term Holdings</h4>
                       <p className="text-3xl font-bold text-blue-600">{summary.shortTermCount}</p>
-                      <p className="text-sm text-gray-500">Held < 12 months</p>
+                      <p className="text-sm text-gray-500">Held &lt; 12 months</p>
                     </div>
                     <div className="bg-gray-50 rounded-xl p-6">
                       <h4 className="font-semibold text-gray-700 mb-2">Total Stocks</h4>
@@ -871,4 +949,4 @@ export default function Home() {
       </div>
     </>
   )
-}`;
+};

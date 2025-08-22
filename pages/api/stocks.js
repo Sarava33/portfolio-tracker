@@ -1,4 +1,5 @@
-const stocksApi = `import { supabase } from '../../lib/supabase'
+//const stocksApi = 
+import { supabase } from '../../lib/supabase'
 
 export default async function handler(req, res) {
   const { method } = req
@@ -79,6 +80,6 @@ export default async function handler(req, res) {
 
     default:
       res.setHeader('Allow', ['GET', 'POST', 'PUT', 'DELETE'])
-      res.status(405).end(\`Method \${method} Not Allowed\`)
+      res.status(405).end(`Method ${method} Not Allowed`)
   }
-}`;
+};
