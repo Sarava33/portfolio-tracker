@@ -69,7 +69,8 @@ export default function Home() {
         
         const holdingsWithPrices = activeHoldings.map(stock => ({
           ...stock,
-          currentPrice: prices[stock.symbol] || stock.buy_price
+          currentPrice: prices[stock.symbol]?.price || stock.buy_price,
+          currency: prices[stock.symbol]?.currency || (stock.symbol.includes('.NS') ? 'INR' : 'USD')
         }))
         setHoldings(holdingsWithPrices)
       } else {
@@ -103,25 +104,25 @@ export default function Home() {
   const updatePrices = async () => {
     if (holdings.length === 0) return
     
-    setIsRefreshing(true) // Start loading
+    setIsRefreshing(true)
     
     const symbols = holdings.map(s => s.symbol).join(',')
     try {
       const response = await fetch(`/api/prices?symbols=${symbols}`)
-      const prices = await response.json()
+      const data = await response.json()
       
       setHoldings(prev => prev.map(stock => ({
         ...stock,
-        currentPrice: prices[stock.symbol] || stock.currentPrice
+        currentPrice: data[stock.symbol]?.price || stock.currentPrice,
+        currency: data[stock.symbol]?.currency || (stock.symbol.includes('.NS') ? 'INR' : 'USD')
       })))
       
-      // Optional: Add a small delay so users can see the animation
       await new Promise(resolve => setTimeout(resolve, 500))
       
     } catch (error) {
       console.error('Error updating prices:', error)
     } finally {
-      setIsRefreshing(false) // Stop loading
+      setIsRefreshing(false)
     }
   }
 
@@ -360,12 +361,13 @@ export default function Home() {
   // Calculations
   const calculatePL = (holding) => {
     const buyValue = holding.quantity * holding.buy_price
+    const currentPrice = holding.currentPrice || holding.buy_price
     const currentValue = holding.quantity * holding.currentPrice
     const buyCommission = buyValue * (holding.commission / 100)
     const buyTotal = buyValue + buyCommission + (holding.service_charge || 0)
     
     const pl = currentValue - buyTotal
-    const plPercent = (pl / buyTotal) * 100
+    const plPercent = buyTotal > 0 ? (pl / buyTotal) * 100 : 0 
     
     return { pl, plPercent, buyTotal, currentValue }
   }
@@ -389,19 +391,48 @@ export default function Home() {
     return days >= 365
   }
 
-  // Summary calculations
+  // // Summary calculations
+  // const summary = holdings.reduce((acc, holding) => {
+  //   const calc = calculatePL(holding)
+  //   acc.totalInvested += calc.buyTotal
+  //   acc.currentValue += calc.currentValue
+  //   acc.totalPL += calc.pl
+  //   acc.longTermCount += isLongTerm(holding.buy_date) ? 1 : 0
+  //   acc.shortTermCount += isLongTerm(holding.buy_date) ? 0 : 1
+  //   return acc
+  // }, { totalInvested: 0, currentValue: 0, totalPL: 0, longTermCount: 0, shortTermCount: 0 })
+
+    // Enhanced summary calculations with currency separation
   const summary = holdings.reduce((acc, holding) => {
     const calc = calculatePL(holding)
+    const isINR = holding.currency === 'INR'
+    
+    if (isINR) {
+      acc.totalInvestedINR += calc.buyTotal
+      acc.currentValueINR += calc.currentValue
+      acc.totalPLINR += calc.pl
+    } else {
+      acc.totalInvestedUSD += calc.buyTotal
+      acc.currentValueUSD += calc.currentValue
+      acc.totalPLUSD += calc.pl
+    }
+    
     acc.totalInvested += calc.buyTotal
     acc.currentValue += calc.currentValue
     acc.totalPL += calc.pl
     acc.longTermCount += isLongTerm(holding.buy_date) ? 1 : 0
     acc.shortTermCount += isLongTerm(holding.buy_date) ? 0 : 1
+    
     return acc
-  }, { totalInvested: 0, currentValue: 0, totalPL: 0, longTermCount: 0, shortTermCount: 0 })
+  }, { 
+    totalInvested: 0, currentValue: 0, totalPL: 0, 
+    totalInvestedUSD: 0, currentValueUSD: 0, totalPLUSD: 0,
+    totalInvestedINR: 0, currentValueINR: 0, totalPLINR: 0,
+    longTermCount: 0, shortTermCount: 0 
+  })
 
-  // Add realized P&L from sold stocks
-  const realizedPL = soldStocks.reduce((total, stock) => {
+  // Add realized P&L separation
+  const realizedPLSeparated = soldStocks.reduce((acc, stock) => {
     if (stock.sell_price && stock.sell_date) {
       const buyValue = stock.quantity * stock.buy_price
       const sellValue = stock.quantity * stock.sell_price
@@ -410,13 +441,41 @@ export default function Home() {
       const buyTotal = buyValue + buyCommission + (stock.service_charge || 0)
       const sellTotal = sellValue - sellCommission
       const realized = sellTotal - buyTotal
-      return total + realized
+      
+      const isINR = stock.currency === 'INR' || stock.symbol.includes('.NS')
+      
+      if (isINR) {
+        acc.realizedPLINR += realized
+      } else {
+        acc.realizedPLUSD += realized
+      }
+      
+      acc.realizedPLTotal += realized
     }
-    return total
-  }, 0)
+    return acc
+  }, { realizedPLUSD: 0, realizedPLINR: 0, realizedPLTotal: 0 })
 
-  summary.totalPL += realizedPL
+  summary.totalPL += realizedPLSeparated.realizedPLTotal
   summary.totalPLPercent = summary.totalInvested > 0 ? (summary.totalPL / summary.totalInvested) * 100 : 0
+
+  // // Add realized P&L from sold stocks
+  // const realizedPL = soldStocks.reduce((total, stock) => {
+  //   if (stock.sell_price && stock.sell_date) {
+  //     const buyValue = stock.quantity * stock.buy_price
+  //     const sellValue = stock.quantity * stock.sell_price
+  //     const buyCommission = buyValue * (stock.commission / 100)
+  //     const sellCommission = sellValue * (stock.commission / 100)
+  //     const buyTotal = buyValue + buyCommission + (stock.service_charge || 0)
+  //     const sellTotal = sellValue - sellCommission
+  //     const realized = sellTotal - buyTotal
+  //     return total + realized
+  //   }
+  //   return total
+  // }, 0)
+
+  // summary.totalPL += realizedPL
+  // summary.totalPLPercent = summary.totalInvested > 0 ? (summary.totalPL / summary.totalInvested) * 100 : 0
+  
   // Chart data
   const pieChartData = holdings.map(h => ({
     name: h.symbol,
@@ -503,15 +562,32 @@ export default function Home() {
               <div className="space-y-3">
                 <div>
                   <p className="text-sm text-blue-600 font-medium">Total Invested</p>
-                  <p className="text-2xl font-bold text-gray-900">
-                    ${summary.totalInvested.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
-                  </p>
+                  {summary.totalInvestedUSD > 0 && (
+                    <p className="text-xl font-bold text-gray-900">
+                      ${summary.totalInvestedUSD.toLocaleString('en-US', {minimumFractionDigits: 2})}
+                    </p>
+                  )}
+                  {summary.totalInvestedINR > 0 && (
+                    <p className="text-xl font-bold text-gray-900">
+                      ₹{summary.totalInvestedINR.toLocaleString('en-IN', {minimumFractionDigits: 2})}
+                    </p>
+                  )}
+                  {summary.totalInvestedUSD > 0 && summary.totalInvestedINR > 0 && (
+                    <p className="text-xs text-gray-500">Mixed currencies</p>
+                  )}
                 </div>
                 <div>
                   <p className="text-sm text-blue-600 font-medium">Current Value</p>
-                  <p className="text-2xl font-bold text-gray-900">
-                    ${summary.currentValue.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
-                  </p>
+                  {summary.currentValueUSD > 0 && (
+                    <p className="text-xl font-bold text-gray-900">
+                      ${summary.currentValueUSD.toLocaleString('en-US', {minimumFractionDigits: 2})}
+                    </p>
+                  )}
+                  {summary.currentValueINR > 0 && (
+                    <p className="text-xl font-bold text-gray-900">
+                      ₹{summary.currentValueINR.toLocaleString('en-IN', {minimumFractionDigits: 2})}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -531,18 +607,34 @@ export default function Home() {
               <div className="space-y-3">
                 <div>
                   <p className="text-sm text-green-600 font-medium">Unrealized P&L</p>
-                  <p className={`text-2xl font-bold ${(summary.totalPL - realizedPL) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {(summary.totalPL - realizedPL) >= 0 ? '+' : ''}$
-                    {Math.abs(summary.totalPL - realizedPL).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
-                  </p>
+                  {((summary.totalPLUSD || 0) - (realizedPLSeparated?.realizedPLUSD || 0)) !== 0 && (
+                    <p className={`text-xl font-bold ${((summary.totalPLUSD || 0) - (realizedPLSeparated?.realizedPLUSD || 0)) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      {((summary.totalPLUSD || 0) - (realizedPLSeparated?.realizedPLUSD || 0)) >= 0 ? '+' : ''}$
+                      {Math.abs((summary.totalPLUSD || 0) - (realizedPLSeparated?.realizedPLUSD || 0)).toLocaleString('en-US', {minimumFractionDigits: 2})}
+                    </p>
+                  )}
+                  {((summary.totalPLINR || 0) - (realizedPLSeparated?.realizedPLINR || 0)) !== 0 && (
+                    <p className={`text-xl font-bold ${((summary.totalPLINR || 0) - (realizedPLSeparated?.realizedPLINR || 0)) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      {((summary.totalPLINR || 0) - (realizedPLSeparated?.realizedPLINR || 0)) >= 0 ? '+' : ''}₹
+                      {Math.abs((summary.totalPLINR || 0) - (realizedPLSeparated?.realizedPLINR || 0)).toLocaleString('en-IN', {minimumFractionDigits: 2})}
+                    </p>
+                  )}
                   <p className="text-xs text-gray-500">Active holdings</p>
                 </div>
                 <div>
                   <p className="text-sm text-green-600 font-medium">Realized P&L</p>
-                  <p className={`text-2xl font-bold ${realizedPL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {realizedPL >= 0 ? '+' : ''}$
-                    {Math.abs(realizedPL).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
-                  </p>
+                  {(realizedPLSeparated?.realizedPLUSD || 0) !== 0 && (
+                    <p className={`text-xl font-bold ${(realizedPLSeparated?.realizedPLUSD || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      {(realizedPLSeparated?.realizedPLUSD || 0) >= 0 ? '+' : ''}$
+                      {Math.abs(realizedPLSeparated?.realizedPLUSD || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}
+                    </p>
+                  )}
+                  {(realizedPLSeparated?.realizedPLINR || 0) !== 0 && (
+                    <p className={`text-xl font-bold ${(realizedPLSeparated?.realizedPLINR || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      {(realizedPLSeparated?.realizedPLINR || 0) >= 0 ? '+' : ''}₹
+                      {Math.abs(realizedPLSeparated?.realizedPLINR || 0).toLocaleString('en-IN', {minimumFractionDigits: 2})}
+                    </p>
+                  )}
                   <p className="text-xs text-gray-500">From completed sales</p>
                 </div>
               </div>
@@ -563,10 +655,7 @@ export default function Home() {
               <div className="space-y-3">
                 <div>
                   <p className="text-sm text-purple-600 font-medium">Total P&L</p>
-                  <p className={`text-2xl font-bold ${summary.totalPL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {summary.totalPL >= 0 ? '+' : ''}$
-                    {Math.abs(summary.totalPL).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
-                  </p>
+                  <p className="text-lg font-bold text-gray-600">Mixed Portfolio</p>
                   <p className={`text-sm font-semibold ${summary.totalPLPercent >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                     {summary.totalPLPercent >= 0 ? '+' : ''}{summary.totalPLPercent.toFixed(2)}% return
                   </p>
@@ -581,7 +670,6 @@ export default function Home() {
               </div>
             </div>
           </div>
-
           {/* Tabs */}
           <div className="bg-white/95 backdrop-blur rounded-2xl shadow-xl">
             <div className="flex border-b">
@@ -660,13 +748,14 @@ export default function Home() {
                                     )}
                                   </div>
                                 </td>
+                                {console.log('Holdings data:', holdings.map(h => ({ symbol: h.symbol, currentPrice: h.currentPrice, type: typeof h.currentPrice })))}
                                 <td className="py-3 px-4">{holding.quantity}</td>
-                                <td className="py-3 px-4">${holding.buy_price.toFixed(2)}</td>
+                                <td className="py-3 px-4">{holding.currency === 'INR' ? '₹' : '$'}{Number(holding.currentPrice || holding.buy_price).toFixed(2)}</td>
                                 <td className="py-3 px-4">
                                   <span className={`font-semibold ${
-                                    holding.currentPrice > holding.buy_price ? 'text-green-600' : 'text-red-600'
+                                    (holding.currentPrice || holding.buy_price) > holding.buy_price ? 'text-green-600' : 'text-red-600'
                                   }`}>
-                                    ${holding.currentPrice.toFixed(2)}
+                                    {holding.currency === 'INR' ? '₹' : '$'}{(holding.currentPrice || holding.buy_price).toFixed(2)}
                                   </span>
                                 </td>
                                 <td className="py-3 px-4">{period}</td>
@@ -674,7 +763,7 @@ export default function Home() {
                                   <span className={`font-semibold ${
                                     calc.pl >= 0 ? 'text-green-600' : 'text-red-600'
                                   }`}>
-                                    {calc.pl >= 0 ? '+' : ''}${Math.abs(calc.pl).toFixed(2)}
+                                    {calc.pl >= 0 ? '+' : ''}{holding.currency === 'INR' ? '₹' : '$'}{Math.abs(calc.pl).toFixed(2)}
                                   </span>
                                 </td>
                                 <td className="py-3 px-4">
